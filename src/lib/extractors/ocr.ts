@@ -1,7 +1,7 @@
 // Server-only: PDF text extraction with OCR fallback for scanned/image-only PDFs
 // Phase 1: pdfjs-dist v6 getTextContent() — text layer extraction (digital PDFs)
 // Phase 2: pdfjs-dist v6 page.render() → @napi-rs/canvas → tesseract.js OCR (scanned PDFs)
-export async function extractOcr(buffer: Buffer): Promise<{ text: string; ocr_used: true }> {
+export async function extractOcr(buffer: Buffer, deadlineMs = Date.now() + 30000): Promise<{ text: string; ocr_used: true }> {
   // Pre-load worker module → sets globalThis.pdfjsWorker = { WorkerMessageHandler }
   // eslint-disable-next-line @typescript-eslint/no-require-imports
   require('pdfjs-dist/legacy/build/pdf.worker.mjs')
@@ -46,6 +46,14 @@ export async function extractOcr(buffer: Buffer): Promise<{ text: string; ocr_us
   }
 
   // Phase 2: image-only PDF — render pages to canvas → tesseract OCR
+  // Skip if insufficient time budget remains (needs at least 5s)
+  if (Date.now() > deadlineMs - 5000) {
+    console.log('[extractOcr] Not enough time for OCR Phase 2, returning Phase 1 result')
+    await pdf.cleanup()
+    await loadingTask.destroy()
+    return { text: phase1Text, ocr_used: true }
+  }
+
   console.log('[extractOcr] Phase 1 empty, switching to image render + OCR, pages:', pdf.numPages)
 
   // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -54,7 +62,6 @@ export async function extractOcr(buffer: Buffer): Promise<{ text: string; ocr_us
   const { createWorker } = require('tesseract.js') as typeof import('tesseract.js')
 
   const ocrWorker = await createWorker('eng', 1, {
-    // suppress verbose tesseract logging
     logger: () => {},
   })
 
@@ -62,6 +69,7 @@ export async function extractOcr(buffer: Buffer): Promise<{ text: string; ocr_us
   const maxPages = Math.min(pdf.numPages, 5)
 
   for (let i = 1; i <= maxPages; i++) {
+    if (Date.now() > deadlineMs - 1500) break // stop if < 1.5s left
     try {
       const page = await pdf.getPage(i)
       const viewport = page.getViewport({ scale: 2.5 })

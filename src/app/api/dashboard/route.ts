@@ -9,18 +9,25 @@ export async function GET() {
   const today = new Date().toISOString().split('T')[0]
   const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString().split('T')[0]
 
-  // Batches today
-  const { data: todayBatches } = await supabase.from('cv_batches')
-    .select('id, posisi_kode, posisi_nama, success, failed, total_files')
-    .gte('created_at', today)
+  // Fetch all 3 queries in parallel
+  const [{ data: todayBatches }, { data: trendData }, { data: recentCandidates }] = await Promise.all([
+    supabase.from('cv_batches')
+      .select('id, posisi_kode, posisi_nama, success, failed, total_files')
+      .gte('created_at', today),
+
+    supabase.from('cv_batches')
+      .select('created_at, total_files')
+      .gte('created_at', sevenDaysAgo)
+      .order('created_at'),
+
+    supabase.from('cv_candidates')
+      .select('*')
+      .eq('extract_status', 'success')
+      .order('created_at', { ascending: false })
+      .limit(5),
+  ])
 
   const total_today = todayBatches?.reduce((a, b) => a + b.total_files, 0) ?? 0
-
-  // Trend: last 7 days
-  const { data: trendData } = await supabase.from('cv_batches')
-    .select('created_at, total_files')
-    .gte('created_at', sevenDaysAgo)
-    .order('created_at')
 
   const trendMap: Record<string, number> = {}
   for (let i = 6; i >= 0; i--) {
@@ -33,16 +40,11 @@ export async function GET() {
   })
   const trend = Object.entries(trendMap).map(([date, count]) => ({ date, count }))
 
-  // Per posisi today
   const posisiMap: Record<string, number> = {}
   todayBatches?.forEach(b => {
     posisiMap[b.posisi_nama] = (posisiMap[b.posisi_nama] ?? 0) + b.total_files
   })
   const per_posisi = Object.entries(posisiMap).map(([posisi, count]) => ({ posisi, count }))
-
-  // Recent submitted candidates
-  const { data: recentCandidates } = await supabase.from('cv_candidates')
-    .select('*').eq('extract_status', 'success').order('created_at', { ascending: false }).limit(5)
 
   return NextResponse.json({
     total_today,
