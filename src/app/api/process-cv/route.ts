@@ -33,7 +33,7 @@ export async function POST(req: NextRequest) {
   })
   const { data: { publicUrl } } = admin.storage.from('cv-files').getPublicUrl(storagePath)
 
-  let result: { text: string; ocr_used: boolean }
+  let result: { text: string; ocr_used: boolean } = { text: '', ocr_used: false }
   let extract_status: 'success' | 'failed' | 'timeout' = 'success'
   let error_message: string | null = null
 

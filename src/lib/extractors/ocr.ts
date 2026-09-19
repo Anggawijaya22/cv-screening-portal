@@ -12,7 +12,6 @@ export async function extractOcr(buffer: Buffer): Promise<{ text: string; ocr_us
   const loadingTask = pdfjs.getDocument({
     data: new Uint8Array(buffer),
     useWorkerFetch: false,
-    isEvalSupported: false,
     useSystemFonts: true,
     verbosity: 0,
   })
@@ -26,8 +25,8 @@ export async function extractOcr(buffer: Buffer): Promise<{ text: string; ocr_us
       const page = await pdf.getPage(i)
       const textContent = await page.getTextContent()
       const pageText = textContent.items
-        .filter((item): item is { str: string } => typeof item === 'object' && item !== null && 'str' in item)
-        .map(item => item.str)
+        .filter(item => 'str' in item)
+        .map(item => (item as { str: string }).str)
         .join(' ')
         .replace(/\s+/g, ' ')
         .trim()
@@ -76,7 +75,7 @@ export async function extractOcr(buffer: Buffer): Promise<{ text: string; ocr_us
       ctx.fillStyle = '#ffffff'
       ctx.fillRect(0, 0, w, h)
 
-      await page.render({ canvasContext: ctx as unknown as CanvasRenderingContext2D, viewport }).promise
+      await page.render({ canvasContext: ctx as unknown as CanvasRenderingContext2D, viewport, canvas: canvas as unknown as HTMLCanvasElement }).promise
 
       const pngBuffer = canvas.toBuffer('image/png')
       const { data: { text, confidence } } = await ocrWorker.recognize(pngBuffer)
