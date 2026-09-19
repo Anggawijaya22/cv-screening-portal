@@ -1,0 +1,136 @@
+@import "tailwindcss";
+
+:root {
+  --glass-bg: rgba(0, 30, 22, 0.6);
+  --glass-border: rgba(255, 255, 255, 0.18);
+  --glass-blur: blur(14px);
+  --color-primary: #00897B;
+  --color-primary-hover: #00796B;
+  --color-secondary: #00BCD4;
+  --color-text: #FFFFFF;
+  --color-text-muted: rgba(255, 255, 255, 0.65);
+  --color-danger: #EF5350;
+  --color-success: #66BB6A;
+  --color-warning: #FFA726;
+  --radius-card: 12px;
+  --radius-btn: 8px;
+  --radius-input: 6px;
+  --shadow: 0 8px 32px rgba(0, 0, 0, 0.45);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  background-image: url('/bg.png');
+  background-size: cover;
+  background-position: center;
+  background-attachment: fixed;
+}
+
+body {
+  font-family: 'Inter', sans-serif;
+  min-height: 100vh;
+  color: var(--color-text);
+  background: rgba(0, 35, 26, 0.52);
+}
+
+/* Glassmorphism card */
+.glass {
+  background: var(--glass-bg);
+  backdrop-filter: var(--glass-blur);
+  -webkit-backdrop-filter: var(--glass-blur);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius-card);
+  box-shadow: var(--shadow);
+}
+
+/* Opaque glass — for modals that need to be readable over busy backgrounds */
+.glass-modal {
+  background: rgba(0, 40, 30, 0.92);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius-card);
+  box-shadow: var(--shadow);
+}
+
+/* Scrollbar */
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.2); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.35); }
+
+/* Input base */
+.input-glass {
+  background: rgba(0, 0, 0, 0.25);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius-input);
+  color: var(--color-text);
+  padding: 0.5rem 0.75rem;
+  outline: none;
+  transition: border-color 0.2s;
+  width: 100%;
+}
+.input-glass:focus { border-color: var(--color-primary); }
+.input-glass::placeholder { color: var(--color-text-muted); }
+
+/* Fix select dropdown option colors — browser native dropdowns use OS rendering */
+select.input-glass option {
+  background-color: #003d2e;
+  color: #ffffff;
+}
+select.input-glass option:hover,
+select.input-glass option:checked {
+  background-color: #00695c;
+  color: #ffffff;
+}
+
+/* Button primary */
+.btn-primary {
+  background: var(--color-primary);
+  color: #fff;
+  border: none;
+  border-radius: var(--radius-btn);
+  padding: 0.5rem 1.25rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.2s, opacity 0.2s;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+.btn-primary:hover:not(:disabled) { background: var(--color-primary-hover); }
+.btn-primary:disabled { opacity: 0.5; cursor: not-allowed; }
+
+/* Button ghost */
+.btn-ghost {
+  background: rgba(0, 0, 0, 0.2);
+  color: var(--color-text-muted);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius-btn);
+  padding: 0.5rem 1.25rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+.btn-ghost:hover { background: rgba(255,255,255,0.1); color: var(--color-text); }
+
+/* Badge */
+.badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.2rem 0.6rem;
+  border-radius: 99px;
+  font-size: 0.75rem;
+  font-weight: 500;
+}
+.badge-success { background: rgba(102,187,106,0.2); color: #66BB6A; }
+.badge-danger  { background: rgba(239,83,80,0.2);  color: #EF5350; }
+.badge-warning { background: rgba(255,167,38,0.2); color: #FFA726; }
+.badge-info    { background: rgba(0,188,212,0.2);  color: #00BCD4; }
+.badge-muted   { background: rgba(255,255,255,0.1); color: rgba(255,255,255,0.6); }
