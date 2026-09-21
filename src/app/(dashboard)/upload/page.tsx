@@ -101,6 +101,7 @@ export default function UploadPage() {
         fd.append('candidate_id', fi.id)
 
         if (isLargePdf) {
+          // Step 1: upload file directly from browser to Supabase Storage
           const { error: uploadError } = await supabase.storage
             .from('cv-files').upload(storagePath, fi.file, { contentType: 'application/pdf', upsert: true })
           if (uploadError) {
@@ -108,7 +109,26 @@ export default function UploadPage() {
             await supabase.from('cv_candidates').update({ extract_status: 'failed', error_message: 'Upload gagal' }).eq('id', fi.id)
             continue
           }
-          fd.append('storage_path', storagePath)
+
+          // Step 2: call Supabase Edge Function (60s timeout) — no Vercel 10s limit
+          try {
+            const { data: result, error: fnError } = await supabase.functions.invoke('ocr-process', {
+              body: { storage_path: storagePath, batch_id: currentBatchId!, candidate_id: fi.id },
+            })
+            if (fnError) throw new Error(fnError.message)
+            setFiles(prev => prev.map(f => f.id === fi.id ? {
+              ...f,
+              status: result.extract_status ?? 'failed',
+              ocr_used: result.ocr_used ?? false,
+              error_message: result.error_message,
+              text_length: result.text_length ?? 0,
+            } : f))
+          } catch (fnErr) {
+            const msg = String(fnErr).includes('abort') ? 'Timeout: OCR melebihi batas waktu' : 'Koneksi ke server gagal'
+            setFiles(prev => prev.map(f => f.id === fi.id ? { ...f, status: 'failed', error_message: msg } : f))
+            await supabase.from('cv_candidates').update({ extract_status: 'failed', error_message: msg }).eq('id', fi.id)
+          }
+          continue
         } else {
           fd.append('file', fi.file)
         }
@@ -127,20 +147,7 @@ export default function UploadPage() {
         }
 
         try {
-          let result = await callProcessCv(fd)
-
-          // Auto-retry once for large PDFs on timeout — file is already in Supabase
-          // so retry is just the OCR call with a fresh 10s Vercel budget
-          if (result.extract_status === 'timeout' && isLargePdf) {
-            setFiles(prev => prev.map(f => f.id === fi.id ? { ...f, error_message: 'Timeout, mencoba ulang...' } : f))
-            await new Promise(r => setTimeout(r, 1500))
-            const retryFd = new FormData()
-            retryFd.append('batch_id', currentBatchId!)
-            retryFd.append('candidate_id', fi.id)
-            retryFd.append('storage_path', storagePath)
-            result = await callProcessCv(retryFd)
-          }
-
+          const result = await callProcessCv(fd)
           setFiles(prev => prev.map(f => f.id === fi.id ? {
             ...f,
             status: result.extract_status ?? 'failed',
