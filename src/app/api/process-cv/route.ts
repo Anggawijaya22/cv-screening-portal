@@ -51,14 +51,25 @@ export async function POST(req: NextRequest) {
         console.log('[process-cv] extractPdf failed, falling back to OCR:', String(pdfErr).slice(0, 100))
       }
 
-      // Fall back to OCR only if pdf-parse returned little/no text
+      // Fall back to OCR only if pdf-parse returned little/no text (scanned PDF)
       if (pdfText.length < 50) {
         const elapsed = Date.now() - startTime
         const remaining = 8000 - elapsed
-        if (remaining > 1500) {
-          const { extractOcr } = await import('@/lib/extractors/ocr')
+        if (remaining > 2000) {
+          // Try cloud OCR first (fast, works on Vercel free tier)
+          // Fall back to local Tesseract if cloud OCR fails (works locally)
+          const ocrFn = async () => {
+            try {
+              const { extractScannedPdf } = await import('@/lib/extractors/ocr-api')
+              return await extractScannedPdf(buffer)
+            } catch (apiErr) {
+              console.log('[process-cv] OCR.space failed, falling back to local OCR:', String(apiErr).slice(0, 80))
+              const { extractOcr } = await import('@/lib/extractors/ocr')
+              return await extractOcr(buffer, Date.now() + (remaining - 1000))
+            }
+          }
           result = await Promise.race([
-            extractOcr(buffer, Date.now() + remaining),
+            ocrFn(),
             new Promise<never>((_, reject) =>
               setTimeout(() => reject(new Error('timeout')), remaining)
             ),
