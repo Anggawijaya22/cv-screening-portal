@@ -19,10 +19,11 @@ async function callOcrSpace(
       ErrorMessage?: string[]
       ParsedResults?: Array<{ ParsedText: string }>
     }
-    if (data.IsErroredOnProcessing) {
+    const text = (data.ParsedResults ?? []).map(r => r.ParsedText).join('\n').trim()
+    // "max page limit" sets IsErroredOnProcessing=true but still returns partial text — use it
+    if (!text && data.IsErroredOnProcessing) {
       throw new Error(data.ErrorMessage?.[0] ?? 'OCR.space processing failed')
     }
-    const text = (data.ParsedResults ?? []).map(r => r.ParsedText).join('\n').trim()
     return { text, ocr_used: true }
   } finally {
     clearTimeout(timer)
