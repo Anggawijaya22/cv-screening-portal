@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
-import { createAdminClient } from '@/lib/supabase/admin'
 import { cleanCvText } from '@/lib/extractors/clean-text'
 
 export const maxDuration = 10 // Vercel free tier max is 10s
@@ -25,11 +24,12 @@ export async function POST(req: NextRequest) {
   const fileName = file.name.toLowerCase()
   const ext = fileName.split('.').pop() ?? ''
 
-  // Compute publicUrl immediately (path-based, no network needed), start upload in background
-  const admin = createAdminClient()
+  // Compute publicUrl from known URL pattern (no API call needed)
   const storagePath = `cv-files/${batch_id}/${candidate_id}_${file.name}`
-  const { data: { publicUrl } } = admin.storage.from('cv-files').getPublicUrl(storagePath)
-  const uploadPromise = admin.storage.from('cv-files').upload(storagePath, buffer, {
+  const publicUrl = `${process.env.NEXT_PUBLIC_SUPABASE_URL}/storage/v1/object/public/${storagePath}`
+
+  // Upload in background (parallel with extraction) using user's session
+  const uploadPromise = supabase.storage.from('cv-files').upload(storagePath, buffer, {
     contentType: file.type,
     upsert: true,
   })
