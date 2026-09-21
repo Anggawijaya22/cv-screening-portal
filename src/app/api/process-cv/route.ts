@@ -1,4 +1,4 @@
-import { NextRequest, NextResponse } from 'next/server'
+import { NextRequest, NextResponse, after } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
 import { cleanCvText } from '@/lib/extractors/clean-text'
 
@@ -24,20 +24,19 @@ export async function POST(req: NextRequest) {
   const fileName = file.name.toLowerCase()
   const ext = fileName.split('.').pop() ?? ''
 
-  // Compute publicUrl from known URL pattern (no API call needed)
   const storagePath = `cv-files/${batch_id}/${candidate_id}_${file.name}`
   const publicUrl = `${process.env.NEXT_PUBLIC_SUPABASE_URL}/storage/v1/object/public/${storagePath}`
 
-  // Upload in background (parallel with extraction), with hard timeout
-  const uploadPromise = Promise.race([
-    supabase.storage.from('cv-files').upload(storagePath, buffer, { contentType: file.type, upsert: true }),
-    new Promise<null>(resolve => setTimeout(() => resolve(null), 5000)),
-  ])
+  // Start upload in background immediately, fire-and-forget
+  const uploadPromise = supabase.storage.from('cv-files')
+    .upload(storagePath, buffer, { contentType: file.type, upsert: true })
+    .catch(() => {})
 
   let result: { text: string; ocr_used: boolean } = { text: '', ocr_used: false }
   let extract_status: 'success' | 'failed' | 'timeout' = 'success'
   let error_message: string | null = null
 
+  // EXTRACTION — must complete within 8s to leave 1s for response
   try {
     if (ext === 'pdf') {
       let pdfText = ''
@@ -47,14 +46,13 @@ export async function POST(req: NextRequest) {
         pdfText = pdfResult.text
         result = pdfResult
       } catch (pdfErr) {
-        console.log('[process-cv] extractPdf failed, will try OCR:', String(pdfErr).slice(0, 100))
+        console.log('[process-cv] extractPdf failed:', String(pdfErr).slice(0, 100))
       }
 
-      // Scanned PDF: use OCR.space cloud API (2-5s response, works on free tier)
       if (pdfText.length < 50) {
         const elapsed = Date.now() - startTime
         const remaining = 7500 - elapsed
-        if (remaining > 1500) {
+        if (remaining > 1000) {
           const { extractScannedPdf } = await import('@/lib/extractors/ocr-api')
           result = await Promise.race([
             extractScannedPdf(buffer, remaining),
@@ -85,36 +83,42 @@ export async function POST(req: NextRequest) {
     result = { text: '', ocr_used: false }
   }
 
-  // Wait for upload (already has 5s timeout built in)
-  await uploadPromise.catch(() => {})
+  // DB UPDATES — deferred with after() so they don't block the response
+  const extractedText = result.text
+  const ocrUsed = result.ocr_used
+  const finalStatus = extract_status
+  const finalError = error_message
 
-  // Parallel: update candidate + fetch batch counters + count total
-  const [, { data: batch }, { data: total }] = await Promise.all([
-    supabase.from('cv_candidates').update({
-      file_url: publicUrl,
-      ocr_used: result.ocr_used,
-      cv_text: result.text || null,
-      extract_status,
-      error_message,
-    }).eq('id', candidate_id),
+  after(async () => {
+    await uploadPromise
+    const [, { data: batch }, { data: total }] = await Promise.all([
+      supabase.from('cv_candidates').update({
+        file_url: publicUrl,
+        ocr_used: ocrUsed,
+        cv_text: extractedText || null,
+        extract_status: finalStatus,
+        error_message: finalError,
+      }).eq('id', candidate_id),
 
-    supabase.from('cv_batches')
-      .select('processed, success, failed').eq('id', batch_id).single(),
+      supabase.from('cv_batches')
+        .select('processed, success, failed').eq('id', batch_id).single(),
 
-    supabase.from('cv_candidates')
-      .select('id', { count: 'exact' }).eq('batch_id', batch_id),
-  ])
+      supabase.from('cv_candidates')
+        .select('id', { count: 'exact' }).eq('batch_id', batch_id),
+    ])
 
-  if (batch) {
-    const newProcessed = batch.processed + 1
-    await supabase.from('cv_batches').update({
-      processed: newProcessed,
-      success: extract_status === 'success' ? batch.success + 1 : batch.success,
-      failed: extract_status !== 'success' ? batch.failed + 1 : batch.failed,
-      status: newProcessed >= (total?.length ?? 0) ? 'completed' : 'processing',
-    }).eq('id', batch_id)
-  }
+    if (batch) {
+      const newProcessed = batch.processed + 1
+      await supabase.from('cv_batches').update({
+        processed: newProcessed,
+        success: finalStatus === 'success' ? batch.success + 1 : batch.success,
+        failed: finalStatus !== 'success' ? batch.failed + 1 : batch.failed,
+        status: newProcessed >= (total?.length ?? 0) ? 'completed' : 'processing',
+      }).eq('id', batch_id)
+    }
+  })
 
+  // Return immediately — DB updates run in background after response
   return NextResponse.json({
     ok: extract_status === 'success',
     extract_status,
