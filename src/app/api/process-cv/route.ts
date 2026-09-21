@@ -4,6 +4,9 @@ import { cleanCvText } from '@/lib/extractors/clean-text'
 
 export const maxDuration = 10
 
+// PDF > 700KB is almost certainly a scanned (image-only) PDF — skip text extraction
+const LARGE_PDF_THRESHOLD = 700 * 1024
+
 export async function POST(req: NextRequest) {
   const startTime = Date.now()
   const supabase = await createClient()
@@ -27,10 +30,10 @@ export async function POST(req: NextRequest) {
   const storagePath = `cv-files/${batch_id}/${candidate_id}_${file.name}`
   const publicUrl = `${process.env.NEXT_PUBLIC_SUPABASE_URL}/storage/v1/object/public/${storagePath}`
 
-  // Start upload immediately — fire-and-forget, but keep a ref we can also await
+  // Upload starts immediately in background — keep ref to await when needed
   const uploadPromise = supabase.storage.from('cv-files')
     .upload(storagePath, buffer, { contentType: file.type, upsert: true })
-    .catch(() => null)  // never rejects; null = failed
+    .catch(() => null)
 
   let result: { text: string; ocr_used: boolean } = { text: '', ocr_used: false }
   let extract_status: 'success' | 'failed' | 'timeout' = 'success'
@@ -38,36 +41,38 @@ export async function POST(req: NextRequest) {
 
   try {
     if (ext === 'pdf') {
-      let pdfText = ''
-      try {
-        const { extractPdf } = await import('@/lib/extractors/pdf')
-        const pdfResult = await extractPdf(buffer)
-        pdfText = pdfResult.text
-        result = pdfResult
-      } catch (pdfErr) {
-        console.log('[process-cv] extractPdf failed:', String(pdfErr).slice(0, 100))
+      const isLargePdf = buffer.length > LARGE_PDF_THRESHOLD
+
+      if (!isLargePdf) {
+        // Small PDF: try fast text layer extraction first
+        try {
+          const { extractPdf } = await import('@/lib/extractors/pdf')
+          result = await extractPdf(buffer)
+        } catch {
+          // no text layer — will fall through to OCR
+        }
       }
 
-      if (pdfText.length < 50) {
+      // If no text found (or large file skipped text extraction): OCR
+      if (result.text.length < 50) {
         const elapsed = Date.now() - startTime
-        const remaining = 7500 - elapsed
-
+        // Use 9000ms budget: leaves ~1s for response + after() DB writes
+        const remaining = 9000 - elapsed
         if (remaining < 2000) throw new Error('timeout')
 
-        const isLargePdf = buffer.length > 700 * 1024 // >700 KB → base64 would hit OCR.space limit
-
         if (isLargePdf) {
-          // Upload must finish before we can get a signed URL
+          // Wait for upload to complete, then use signed URL
+          // (Vercel → Supabase iad1→iad1 is fast; upload likely already done)
           const uploadRes = await uploadPromise
           if (!uploadRes?.data) throw new Error('Gagal mengupload file, coba ulangi')
 
           const { data: signed } = await supabase.storage
-            .from('cv-files').createSignedUrl(storagePath, 300) // 5-minute URL
+            .from('cv-files').createSignedUrl(storagePath, 300)
           if (!signed?.signedUrl) throw new Error('Gagal membuat akses OCR, coba ulangi')
 
           const elapsed2 = Date.now() - startTime
-          const remaining2 = 7500 - elapsed2
-          if (remaining2 < 1000) throw new Error('timeout')
+          const remaining2 = 9000 - elapsed2
+          if (remaining2 < 1500) throw new Error('timeout')
 
           const { extractScannedPdfByUrl } = await import('@/lib/extractors/ocr-api')
           result = await Promise.race([
@@ -77,6 +82,7 @@ export async function POST(req: NextRequest) {
             ),
           ])
         } else {
+          // Small scanned PDF: send as base64 directly
           const { extractScannedPdf } = await import('@/lib/extractors/ocr-api')
           result = await Promise.race([
             extractScannedPdf(buffer, remaining),
@@ -110,9 +116,9 @@ export async function POST(req: NextRequest) {
   const finalStatus = extract_status
   const finalError = error_message
 
-  // DB updates deferred — run after response is sent
+  // DB updates run after response is sent — won't block the response
   after(async () => {
-    await uploadPromise  // no-op if already resolved (large PDF path)
+    await uploadPromise
     const [, { data: batch }, { data: total }] = await Promise.all([
       supabase.from('cv_candidates').update({
         file_url: publicUrl,
