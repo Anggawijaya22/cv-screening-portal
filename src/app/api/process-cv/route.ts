@@ -56,8 +56,8 @@ export async function POST(req: NextRequest) {
       // If no text found (or large file skipped text extraction): OCR
       if (result.text.length < 50) {
         const elapsed = Date.now() - startTime
-        // Use 9000ms budget: leaves ~1s for response + after() DB writes
-        const remaining = 9000 - elapsed
+        // Use 9500ms budget: leaves ~500ms for response + after() DB writes
+        const remaining = 9500 - elapsed
         if (remaining < 2000) throw new Error('timeout')
 
         if (isLargePdf) {
@@ -71,7 +71,7 @@ export async function POST(req: NextRequest) {
           if (!signed?.signedUrl) throw new Error('Gagal membuat akses OCR, coba ulangi')
 
           const elapsed2 = Date.now() - startTime
-          const remaining2 = 9000 - elapsed2
+          const remaining2 = 9500 - elapsed2
           if (remaining2 < 1500) throw new Error('timeout')
 
           const { extractScannedPdfByUrl } = await import('@/lib/extractors/ocr-api')
