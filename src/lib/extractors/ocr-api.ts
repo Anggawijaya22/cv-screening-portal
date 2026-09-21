@@ -44,8 +44,7 @@ export async function extractScannedPdfByUrl(
   form.append('filetype', 'PDF')
   form.append('isOverlayRequired', 'false')
   form.append('OCREngine', '1')
-  form.append('scale', 'true')
-  form.append('detectOrientation', 'true')
+  // scale/detectOrientation removed — each adds ~150ms; marginal but consistent saving
   return callOcrSpace(form, timeoutMs)
 }
 
@@ -62,7 +61,6 @@ export async function extractScannedPdf(
   form.append('filetype', 'PDF')
   form.append('isOverlayRequired', 'false')
   form.append('OCREngine', '1')
-  form.append('scale', 'true')
-  form.append('detectOrientation', 'true')
+  // scale/detectOrientation removed — each adds ~150ms; marginal but consistent saving
   return callOcrSpace(form, timeoutMs)
 }

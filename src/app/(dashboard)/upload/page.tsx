@@ -113,14 +113,34 @@ export default function UploadPage() {
           fd.append('file', fi.file)
         }
 
-        try {
+        const callProcessCv = async (formData: FormData) => {
           const controller = new AbortController()
           const timer = setTimeout(() => controller.abort(), 15000)
-          const res = await fetch('/api/process-cv', { method: 'POST', body: fd, signal: controller.signal })
-          clearTimeout(timer)
+          try {
+            const res = await fetch('/api/process-cv', { method: 'POST', body: formData, signal: controller.signal })
+            clearTimeout(timer)
+            if (!res.ok) throw new Error(`Server error ${res.status}`)
+            return await res.json()
+          } finally {
+            clearTimeout(timer)
+          }
+        }
 
-          if (!res.ok) throw new Error(`Server error ${res.status}`)
-          const result = await res.json()
+        try {
+          let result = await callProcessCv(fd)
+
+          // Auto-retry once for large PDFs on timeout — file is already in Supabase
+          // so retry is just the OCR call with a fresh 10s Vercel budget
+          if (result.extract_status === 'timeout' && isLargePdf) {
+            setFiles(prev => prev.map(f => f.id === fi.id ? { ...f, error_message: 'Timeout, mencoba ulang...' } : f))
+            await new Promise(r => setTimeout(r, 1500))
+            const retryFd = new FormData()
+            retryFd.append('batch_id', currentBatchId!)
+            retryFd.append('candidate_id', fi.id)
+            retryFd.append('storage_path', storagePath)
+            result = await callProcessCv(retryFd)
+          }
+
           setFiles(prev => prev.map(f => f.id === fi.id ? {
             ...f,
             status: result.extract_status ?? 'failed',

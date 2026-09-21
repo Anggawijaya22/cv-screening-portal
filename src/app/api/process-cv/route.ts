@@ -52,8 +52,12 @@ export async function POST(req: NextRequest) {
       result = { ...result, text: cleanCvText(result.text) }
     } catch (err) {
       console.error('[process-cv] ocr error:', err)
-      extract_status = String(err).includes('timeout') ? 'timeout' : 'failed'
-      error_message = String(err).replace('Error: ', '')
+      const errStr = String(err)
+      const isTimeout = errStr.includes('timeout') || errStr.includes('AbortError')
+      extract_status = isTimeout ? 'timeout' : 'failed'
+      error_message = isTimeout
+        ? 'Timeout: OCR melebihi batas waktu, coba upload ulang'
+        : errStr.replace(/^(AbortError|Error): /, '')
       result = { text: '', ocr_used: false }
     }
 
@@ -153,8 +157,12 @@ export async function POST(req: NextRequest) {
     result = { ...result, text: cleanCvText(result.text) }
   } catch (err) {
     console.error('[process-cv] extraction error:', err)
-    extract_status = String(err).includes('timeout') ? 'timeout' : 'failed'
-    error_message = String(err).replace('Error: ', '')
+    const errStr = String(err)
+    const isTimeout = errStr.includes('timeout') || errStr.includes('AbortError')
+    extract_status = isTimeout ? 'timeout' : 'failed'
+    error_message = isTimeout
+      ? 'Timeout: OCR melebihi batas waktu, coba upload ulang'
+      : errStr.replace(/^(AbortError|Error): /, '')
     result = { text: '', ocr_used: false }
   }
 
