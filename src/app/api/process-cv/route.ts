@@ -53,9 +53,17 @@ export async function POST(req: NextRequest) {
         const elapsed = Date.now() - startTime
         const remaining = 7500 - elapsed
         if (remaining > 1000) {
-          const { extractScannedPdf } = await import('@/lib/extractors/ocr-api')
+          // Large files (>700KB) exceed OCR.space base64 limit — upload first and use URL
+          const usesUrl = buffer.length > 700 * 1024
+          if (usesUrl) {
+            await uploadPromise
+          }
+          const { extractScannedPdf, extractScannedPdfByUrl } = await import('@/lib/extractors/ocr-api')
+          const ocrFn = usesUrl
+            ? extractScannedPdfByUrl(publicUrl, remaining)
+            : extractScannedPdf(buffer, remaining)
           result = await Promise.race([
-            extractScannedPdf(buffer, remaining),
+            ocrFn,
             new Promise<never>((_, reject) =>
               setTimeout(() => reject(new Error('timeout')), remaining)
             ),
