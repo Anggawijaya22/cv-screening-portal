@@ -87,20 +87,39 @@ export default function UploadPage() {
     await supabase.from('cv_candidates').insert(inserts)
 
     // Process each file sequentially to avoid overwhelming server
-    for (const fi of fileItems) {
-      setFiles(prev => prev.map(f => f.id === fi.id ? { ...f, status: 'processing' } : f))
-      const fd = new FormData()
-      fd.append('file', fi.file)
-      fd.append('batch_id', currentBatchId!)
-      fd.append('candidate_id', fi.id)
-      const res = await fetch('/api/process-cv', { method: 'POST', body: fd })
-      const result = await res.json()
-      setFiles(prev => prev.map(f => f.id === fi.id ? {
-        ...f, status: result.extract_status, ocr_used: result.ocr_used,
-        error_message: result.error_message, text_length: result.text_length ?? 0
-      } : f))
+    try {
+      for (const fi of fileItems) {
+        setFiles(prev => prev.map(f => f.id === fi.id ? { ...f, status: 'processing' } : f))
+        const fd = new FormData()
+        fd.append('file', fi.file)
+        fd.append('batch_id', currentBatchId!)
+        fd.append('candidate_id', fi.id)
+
+        try {
+          const controller = new AbortController()
+          const timer = setTimeout(() => controller.abort(), 15000)
+          const res = await fetch('/api/process-cv', { method: 'POST', body: fd, signal: controller.signal })
+          clearTimeout(timer)
+
+          if (!res.ok) throw new Error(`Server error ${res.status}`)
+          const result = await res.json()
+          setFiles(prev => prev.map(f => f.id === fi.id ? {
+            ...f,
+            status: result.extract_status ?? 'failed',
+            ocr_used: result.ocr_used ?? false,
+            error_message: result.error_message,
+            text_length: result.text_length ?? 0,
+          } : f))
+        } catch (fetchErr) {
+          const msg = String(fetchErr).includes('abort') ? 'Timeout: server tidak merespons' : 'Koneksi ke server gagal'
+          setFiles(prev => prev.map(f => f.id === fi.id ? { ...f, status: 'failed', error_message: msg } : f))
+          // Also update DB so batch counters stay accurate
+          await supabase.from('cv_candidates').update({ extract_status: 'failed', error_message: msg }).eq('id', fi.id)
+        }
+      }
+    } finally {
+      processingRef.current = false
     }
-    processingRef.current = false
   }, [selectedPos, positions, batchId, files.length])
 
   const handleDrop = useCallback((e: React.DragEvent) => {

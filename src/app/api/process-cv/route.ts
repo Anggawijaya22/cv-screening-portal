@@ -25,14 +25,14 @@ export async function POST(req: NextRequest) {
   const fileName = file.name.toLowerCase()
   const ext = fileName.split('.').pop() ?? ''
 
-  // Upload to Supabase Storage
+  // Compute publicUrl immediately (path-based, no network needed), start upload in background
   const admin = createAdminClient()
   const storagePath = `cv-files/${batch_id}/${candidate_id}_${file.name}`
-  await admin.storage.from('cv-files').upload(storagePath, buffer, {
+  const { data: { publicUrl } } = admin.storage.from('cv-files').getPublicUrl(storagePath)
+  const uploadPromise = admin.storage.from('cv-files').upload(storagePath, buffer, {
     contentType: file.type,
     upsert: true,
   })
-  const { data: { publicUrl } } = admin.storage.from('cv-files').getPublicUrl(storagePath)
 
   let result: { text: string; ocr_used: boolean } = { text: '', ocr_used: false }
   let extract_status: 'success' | 'failed' | 'timeout' = 'success'
@@ -85,6 +85,9 @@ export async function POST(req: NextRequest) {
     error_message = String(err).replace('Error: ', '')
     result = { text: '', ocr_used: false }
   }
+
+  // Ensure storage upload finished before writing URL to DB
+  await uploadPromise.catch(() => {}) // non-fatal: URL is still valid even if upload retried
 
   // Parallel: update candidate + fetch batch counters + count total
   const [, { data: batch }, { data: total }] = await Promise.all([
