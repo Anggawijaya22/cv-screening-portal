@@ -90,10 +90,28 @@ export default function UploadPage() {
     try {
       for (const fi of fileItems) {
         setFiles(prev => prev.map(f => f.id === fi.id ? { ...f, status: 'processing' } : f))
+
+        // Large PDFs (>700KB) are uploaded directly from browser to Supabase
+        // so the Vercel function only needs to OCR (not receive the file)
+        const isLargePdf = fi.file.name.toLowerCase().endsWith('.pdf') && fi.file.size > 700 * 1024
+        const storagePath = `cv-files/${currentBatchId!}/${fi.id}_${fi.file.name}`
+
         const fd = new FormData()
-        fd.append('file', fi.file)
         fd.append('batch_id', currentBatchId!)
         fd.append('candidate_id', fi.id)
+
+        if (isLargePdf) {
+          const { error: uploadError } = await supabase.storage
+            .from('cv-files').upload(storagePath, fi.file, { contentType: 'application/pdf', upsert: true })
+          if (uploadError) {
+            setFiles(prev => prev.map(f => f.id === fi.id ? { ...f, status: 'failed', error_message: 'Upload gagal: ' + uploadError.message } : f))
+            await supabase.from('cv_candidates').update({ extract_status: 'failed', error_message: 'Upload gagal' }).eq('id', fi.id)
+            continue
+          }
+          fd.append('storage_path', storagePath)
+        } else {
+          fd.append('file', fi.file)
+        }
 
         try {
           const controller = new AbortController()

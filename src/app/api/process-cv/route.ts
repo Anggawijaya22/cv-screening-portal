@@ -4,9 +4,6 @@ import { cleanCvText } from '@/lib/extractors/clean-text'
 
 export const maxDuration = 10
 
-// PDF > 700KB is almost certainly a scanned (image-only) PDF — skip text extraction
-const LARGE_PDF_THRESHOLD = 700 * 1024
-
 export async function POST(req: NextRequest) {
   const startTime = Date.now()
   const supabase = await createClient()
@@ -15,24 +12,103 @@ export async function POST(req: NextRequest) {
 
   const formData = await req.formData()
   const file = formData.get('file') as File | null
+  const storagePath_input = formData.get('storage_path') as string | null
   const batch_id = formData.get('batch_id') as string
   const candidate_id = formData.get('candidate_id') as string
 
-  if (!file || !batch_id || !candidate_id) {
+  if ((!file && !storagePath_input) || !batch_id || !candidate_id) {
     return NextResponse.json({ error: 'Missing required fields' }, { status: 400 })
   }
 
-  const arrayBuffer = await file.arrayBuffer()
+  // Fast path: large PDF already uploaded by client directly to Supabase
+  // Client sends storage_path instead of file — API only needs to OCR
+  if (storagePath_input) {
+    const storagePath = storagePath_input
+    const publicUrl = `${process.env.NEXT_PUBLIC_SUPABASE_URL}/storage/v1/object/public/${storagePath}`
+    let result: { text: string; ocr_used: boolean } = { text: '', ocr_used: false }
+    let extract_status: 'success' | 'failed' | 'timeout' = 'success'
+    let error_message: string | null = null
+
+    try {
+      const { data: signed } = await supabase.storage
+        .from('cv-files').createSignedUrl(storagePath, 300)
+      if (!signed?.signedUrl) throw new Error('Gagal membuat akses OCR, coba ulangi')
+
+      const elapsed = Date.now() - startTime
+      const remaining = 9500 - elapsed
+      if (remaining < 2000) throw new Error('timeout')
+
+      const { extractScannedPdfByUrl } = await import('@/lib/extractors/ocr-api')
+      result = await Promise.race([
+        extractScannedPdfByUrl(signed.signedUrl, remaining),
+        new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error('timeout')), remaining)
+        ),
+      ])
+
+      if (!result.text || result.text.length < 10) {
+        throw new Error('Teks tidak dapat diekstrak dari file ini')
+      }
+      result = { ...result, text: cleanCvText(result.text) }
+    } catch (err) {
+      console.error('[process-cv] ocr error:', err)
+      extract_status = String(err).includes('timeout') ? 'timeout' : 'failed'
+      error_message = String(err).replace('Error: ', '')
+      result = { text: '', ocr_used: false }
+    }
+
+    const extractedText = result.text
+    const ocrUsed = result.ocr_used
+    const finalStatus = extract_status
+    const finalError = error_message
+
+    after(async () => {
+      const [, { data: batch }, { data: total }] = await Promise.all([
+        supabase.from('cv_candidates').update({
+          file_url: publicUrl,
+          ocr_used: ocrUsed,
+          cv_text: extractedText || null,
+          extract_status: finalStatus,
+          error_message: finalError,
+        }).eq('id', candidate_id),
+        supabase.from('cv_batches')
+          .select('processed, success, failed').eq('id', batch_id).single(),
+        supabase.from('cv_candidates')
+          .select('id', { count: 'exact' }).eq('batch_id', batch_id),
+      ])
+      if (batch) {
+        const newProcessed = batch.processed + 1
+        await supabase.from('cv_batches').update({
+          processed: newProcessed,
+          success: finalStatus === 'success' ? batch.success + 1 : batch.success,
+          failed: finalStatus !== 'success' ? batch.failed + 1 : batch.failed,
+          status: newProcessed >= (total?.length ?? 0) ? 'completed' : 'processing',
+        }).eq('id', batch_id)
+      }
+    })
+
+    return NextResponse.json({
+      ok: extract_status === 'success',
+      extract_status,
+      ocr_used: result.ocr_used,
+      text_length: result.text.length,
+      error_message,
+      file_url: publicUrl,
+    })
+  }
+
+  // Normal path: file sent directly (small files and non-PDF documents)
+  const arrayBuffer = await file!.arrayBuffer()
   const buffer = Buffer.from(arrayBuffer)
-  const fileName = file.name.toLowerCase()
+  const fileName = file!.name.toLowerCase()
   const ext = fileName.split('.').pop() ?? ''
 
-  const storagePath = `cv-files/${batch_id}/${candidate_id}_${file.name}`
+  const storagePath = `cv-files/${batch_id}/${candidate_id}_${file!.name}`
   const publicUrl = `${process.env.NEXT_PUBLIC_SUPABASE_URL}/storage/v1/object/public/${storagePath}`
 
   // Upload starts immediately in background — keep ref to await when needed
   const uploadPromise = supabase.storage.from('cv-files')
-    .upload(storagePath, buffer, { contentType: file.type, upsert: true })
+    .upload(storagePath, buffer, { contentType: file!.type, upsert: true })
     .catch(() => null)
 
   let result: { text: string; ocr_used: boolean } = { text: '', ocr_used: false }
@@ -41,56 +117,27 @@ export async function POST(req: NextRequest) {
 
   try {
     if (ext === 'pdf') {
-      const isLargePdf = buffer.length > LARGE_PDF_THRESHOLD
-
-      if (!isLargePdf) {
-        // Small PDF: try fast text layer extraction first
-        try {
-          const { extractPdf } = await import('@/lib/extractors/pdf')
-          result = await extractPdf(buffer)
-        } catch {
-          // no text layer — will fall through to OCR
-        }
+      // Small PDF: try fast text layer extraction first
+      try {
+        const { extractPdf } = await import('@/lib/extractors/pdf')
+        result = await extractPdf(buffer)
+      } catch {
+        // no text layer — will fall through to OCR
       }
 
-      // If no text found (or large file skipped text extraction): OCR
+      // If no text found: OCR via base64
       if (result.text.length < 50) {
         const elapsed = Date.now() - startTime
-        // Use 9500ms budget: leaves ~500ms for response + after() DB writes
         const remaining = 9500 - elapsed
         if (remaining < 2000) throw new Error('timeout')
 
-        if (isLargePdf) {
-          // Wait for upload to complete, then use signed URL
-          // (Vercel → Supabase iad1→iad1 is fast; upload likely already done)
-          const uploadRes = await uploadPromise
-          if (!uploadRes?.data) throw new Error('Gagal mengupload file, coba ulangi')
-
-          const { data: signed } = await supabase.storage
-            .from('cv-files').createSignedUrl(storagePath, 300)
-          if (!signed?.signedUrl) throw new Error('Gagal membuat akses OCR, coba ulangi')
-
-          const elapsed2 = Date.now() - startTime
-          const remaining2 = 9500 - elapsed2
-          if (remaining2 < 1500) throw new Error('timeout')
-
-          const { extractScannedPdfByUrl } = await import('@/lib/extractors/ocr-api')
-          result = await Promise.race([
-            extractScannedPdfByUrl(signed.signedUrl, remaining2),
-            new Promise<never>((_, reject) =>
-              setTimeout(() => reject(new Error('timeout')), remaining2)
-            ),
-          ])
-        } else {
-          // Small scanned PDF: send as base64 directly
-          const { extractScannedPdf } = await import('@/lib/extractors/ocr-api')
-          result = await Promise.race([
-            extractScannedPdf(buffer, remaining),
-            new Promise<never>((_, reject) =>
-              setTimeout(() => reject(new Error('timeout')), remaining)
-            ),
-          ])
-        }
+        const { extractScannedPdf } = await import('@/lib/extractors/ocr-api')
+        result = await Promise.race([
+          extractScannedPdf(buffer, remaining),
+          new Promise<never>((_, reject) =>
+            setTimeout(() => reject(new Error('timeout')), remaining)
+          ),
+        ])
       }
     } else if (ext === 'docx' || ext === 'doc' || ext === 'rtf' || ext === 'odt') {
       const { extractDocx } = await import('@/lib/extractors/docx')
