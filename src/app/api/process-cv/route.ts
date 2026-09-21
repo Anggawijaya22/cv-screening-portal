@@ -28,11 +28,11 @@ export async function POST(req: NextRequest) {
   const storagePath = `cv-files/${batch_id}/${candidate_id}_${file.name}`
   const publicUrl = `${process.env.NEXT_PUBLIC_SUPABASE_URL}/storage/v1/object/public/${storagePath}`
 
-  // Upload in background (parallel with extraction) using user's session
-  const uploadPromise = supabase.storage.from('cv-files').upload(storagePath, buffer, {
-    contentType: file.type,
-    upsert: true,
-  })
+  // Upload in background (parallel with extraction), with hard timeout
+  const uploadPromise = Promise.race([
+    supabase.storage.from('cv-files').upload(storagePath, buffer, { contentType: file.type, upsert: true }),
+    new Promise<null>(resolve => setTimeout(() => resolve(null), 5000)),
+  ])
 
   let result: { text: string; ocr_used: boolean } = { text: '', ocr_used: false }
   let extract_status: 'success' | 'failed' | 'timeout' = 'success'
@@ -47,29 +47,17 @@ export async function POST(req: NextRequest) {
         pdfText = pdfResult.text
         result = pdfResult
       } catch (pdfErr) {
-        // pdf-parse may throw on scanned/corrupt PDFs — fall through to OCR
-        console.log('[process-cv] extractPdf failed, falling back to OCR:', String(pdfErr).slice(0, 100))
+        console.log('[process-cv] extractPdf failed, will try OCR:', String(pdfErr).slice(0, 100))
       }
 
-      // Fall back to OCR only if pdf-parse returned little/no text (scanned PDF)
+      // Scanned PDF: use OCR.space cloud API (2-5s response, works on free tier)
       if (pdfText.length < 50) {
         const elapsed = Date.now() - startTime
-        const remaining = 8000 - elapsed
-        if (remaining > 2000) {
-          // Try cloud OCR first (fast, works on Vercel free tier)
-          // Fall back to local Tesseract if cloud OCR fails (works locally)
-          const ocrFn = async () => {
-            try {
-              const { extractScannedPdf } = await import('@/lib/extractors/ocr-api')
-              return await extractScannedPdf(buffer)
-            } catch (apiErr) {
-              console.log('[process-cv] OCR.space failed, falling back to local OCR:', String(apiErr).slice(0, 80))
-              const { extractOcr } = await import('@/lib/extractors/ocr')
-              return await extractOcr(buffer, Date.now() + (remaining - 1000))
-            }
-          }
+        const remaining = 7500 - elapsed
+        if (remaining > 1500) {
+          const { extractScannedPdf } = await import('@/lib/extractors/ocr-api')
           result = await Promise.race([
-            ocrFn(),
+            extractScannedPdf(buffer, remaining),
             new Promise<never>((_, reject) =>
               setTimeout(() => reject(new Error('timeout')), remaining)
             ),
@@ -97,8 +85,8 @@ export async function POST(req: NextRequest) {
     result = { text: '', ocr_used: false }
   }
 
-  // Ensure storage upload finished before writing URL to DB
-  await uploadPromise.catch(() => {}) // non-fatal: URL is still valid even if upload retried
+  // Wait for upload (already has 5s timeout built in)
+  await uploadPromise.catch(() => {})
 
   // Parallel: update candidate + fetch batch counters + count total
   const [, { data: batch }, { data: total }] = await Promise.all([
