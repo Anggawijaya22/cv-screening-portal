@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
+import { createAdminClient } from '@/lib/supabase/admin'
 
 export async function GET() {
   const supabase = await createClient()
@@ -35,20 +36,43 @@ export async function POST(req: NextRequest) {
   if (!username) return NextResponse.json({ error: 'Username wajib diisi' }, { status: 400 })
   if (!body.password || body.password.length < 8) return NextResponse.json({ error: 'Password minimal 8 karakter' }, { status: 400 })
 
-  const { data: profile, error } = await supabase.rpc('admin_create_user', {
-    p_username: username,
-    p_nama: body.nama || username,
-    p_role: body.role || 'hr_admin',
-    p_password: body.password,
-    p_created_by: user.id,
+  const admin = createAdminClient()
+  const email = `${username}@bpi.internal`
+
+  // Buat auth user via Admin API — password di-hash oleh GoTrue langsung
+  const { data: authData, error: authError } = await admin.auth.admin.createUser({
+    email,
+    password: body.password,
+    email_confirm: true,
   })
 
-  if (error) {
+  if (authError) {
     await supabase.from('activity_logs').insert({
       user_id: user.id, action: 'add_user', status: 'failed',
-      detail: { username, role: body.role, error: error.message },
+      detail: { username, role: body.role, error: authError.message },
     })
-    return NextResponse.json({ error: error.message }, { status: 400 })
+    return NextResponse.json({ error: authError.message }, { status: 400 })
+  }
+
+  // Simpan profil di public.users
+  const { data: profile, error: profileError } = await admin.from('users').insert({
+    id: authData.user.id,
+    username,
+    nama: body.nama || username,
+    email,
+    role: body.role || 'hr_admin',
+    is_active: true,
+    created_by: user.id,
+  }).select().single()
+
+  if (profileError) {
+    // Rollback: hapus auth user yang baru dibuat
+    await admin.auth.admin.deleteUser(authData.user.id)
+    await supabase.from('activity_logs').insert({
+      user_id: user.id, action: 'add_user', status: 'failed',
+      detail: { username, role: body.role, error: profileError.message },
+    })
+    return NextResponse.json({ error: profileError.message }, { status: 400 })
   }
 
   await supabase.from('activity_logs').insert({

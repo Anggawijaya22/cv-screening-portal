@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
+import { createAdminClient } from '@/lib/supabase/admin'
 
 type Role = 'developer' | 'hr_main_admin' | 'hr_admin'
 
@@ -53,9 +54,8 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
     if (!body.password || body.password.length < 8) {
       return NextResponse.json({ error: 'Password minimal 8 karakter' }, { status: 400 })
     }
-    const { error } = await supabase.rpc('admin_update_password', {
-      p_user_id: id, p_new_password: body.password,
-    })
+    const admin = createAdminClient()
+    const { error } = await admin.auth.admin.updateUserById(id, { password: body.password })
     if (error) return NextResponse.json({ error: error.message }, { status: 400 })
     await supabase.from('activity_logs').insert({
       user_id: user.id, action: 'reset_password', status: 'success',
@@ -102,7 +102,10 @@ export async function DELETE(_req: NextRequest, { params }: { params: Promise<{ 
     return NextResponse.json({ error: 'Tidak punya izin untuk menghapus user ini' }, { status: 403 })
   }
 
-  const { error } = await supabase.rpc('admin_delete_user', { p_user_id: id })
+  const admin = createAdminClient()
+  // Hapus dari public.users dulu agar FK tidak conflict
+  await admin.from('users').delete().eq('id', id)
+  const { error } = await admin.auth.admin.deleteUser(id)
   if (error) return NextResponse.json({ error: error.message }, { status: 400 })
 
   await supabase.from('activity_logs').insert({
