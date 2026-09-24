@@ -6,7 +6,12 @@ export async function GET() {
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
-  const { data, error } = await supabase.from('users').select('*').order('created_at', { ascending: false })
+  const { data: actor } = await supabase.from('users').select('role').eq('id', user.id).single()
+
+  let q = supabase.from('users').select('*').order('created_at', { ascending: false })
+  if (actor?.role !== 'developer') q = q.neq('role', 'developer')
+
+  const { data, error } = await q
   if (error) return NextResponse.json({ error: error.message }, { status: 500 })
   return NextResponse.json({ data })
 }
