@@ -2,8 +2,9 @@ import type { Metadata } from 'next'
 import './globals.css'
 
 export const metadata: Metadata = {
-  title: 'CV Screening Portal — RSUP',
-  description: 'CV Screening Portal PT Riau Sakti United Plantations',
+  title: 'CV Screening Portal — PT BPI',
+  description: 'CV Screening Portal PT BPI',
+  icons: { icon: '/logo-bpi.jpeg' },
 }
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {

@@ -14,7 +14,7 @@ const allMenus = [
   { href: '/dashboard', label: 'Dashboard', icon: LayoutDashboard, roles: ['developer','hr_main_admin','hr_admin'] },
   { href: '/upload', label: 'Upload CV', icon: Upload, roles: ['developer','hr_main_admin','hr_admin'] },
   { href: '/history', label: 'History', icon: ClipboardList, roles: ['developer','hr_main_admin','hr_admin'] },
-  { href: '/log', label: 'Log', icon: ScrollText, roles: ['developer','hr_main_admin'] },
+  { href: '/log', label: 'Log', icon: ScrollText, roles: ['developer'] },
   { href: '/account', label: 'Account', icon: Users, roles: ['developer','hr_main_admin','hr_admin'] },
   { href: '/setting', label: 'Setting', icon: Settings, roles: ['developer','hr_main_admin'] },
 ]
