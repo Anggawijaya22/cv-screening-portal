@@ -13,14 +13,14 @@ export async function GET(req: NextRequest) {
   const limit = parseInt(searchParams.get('limit') ?? '50')
 
   const { data: profile } = await supabase.from('users').select('role').eq('id', user.id).single()
-  const isAdmin = ['developer', 'hr_main_admin'].includes(profile?.role ?? '')
+  const isDeveloper = profile?.role === 'developer'
 
   let q = supabase.from('cv_batches')
     .select('*, users(nama)', { count: 'exact' })
     .order('created_at', { ascending: false })
     .limit(limit)
 
-  if (!isAdmin) q = q.eq('created_by', user.id)
+  if (!isDeveloper) q = q.eq('created_by', user.id)
   if (from) q = q.gte('created_at', from)
   if (to) q = q.lte('created_at', to)
   if (posisi) q = q.eq('posisi_kode', posisi)
