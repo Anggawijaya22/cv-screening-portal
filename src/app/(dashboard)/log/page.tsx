@@ -5,7 +5,9 @@ import type { ActivityLog } from '@/types'
 
 const ACTION_LABELS: Record<string, string> = {
   login: 'Login', logout: 'Logout', upload_batch: 'Upload Batch', submit_batch: 'Submit Batch',
-  add_user: 'Tambah User', update_user: 'Update User', reset_password: 'Reset Password',
+  add_user: 'Tambah User', update_user: 'Update User', delete_user: 'Hapus User',
+  activate_user: 'Aktifkan User', deactivate_user: 'Nonaktifkan User',
+  reset_password: 'Reset Password',
   update_setting: 'Update Setting', add_position: 'Tambah Posisi', update_position: 'Update Posisi',
 }
 
