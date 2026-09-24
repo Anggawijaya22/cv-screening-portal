@@ -3,6 +3,45 @@
 import { useEffect, useState } from 'react'
 import type { ActivityLog } from '@/types'
 
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function formatDetail(action: string, detail: any): string {
+  if (!detail) return '-'
+  const d = detail as Record<string, string>
+  const oleh = d.oleh ? ` oleh ${d.oleh}` : ''
+  const target = d.target_nama || d.username || d.target_id || ''
+  const role = d.target_role || d.role || ''
+  const roleLabel = role === 'developer' ? 'Developer' : role === 'hr_main_admin' ? 'HR Main Admin' : role === 'hr_admin' ? 'HR Admin' : role
+
+  switch (action) {
+    case 'login': return 'Login berhasil'
+    case 'logout': return 'Logout'
+    case 'add_user':
+      if (d.reason === 'forbidden') return `Gagal — tidak punya izin (role: ${d.actor_role})`
+      if (d.error) return `Gagal menambah user "${target}" — ${d.error}`
+      return `Menambah user "${target}" sebagai ${roleLabel}${oleh}`
+    case 'delete_user':
+      if (d.reason === 'forbidden') return `Gagal hapus "${target}" — tidak punya izin`
+      return `Menghapus user "${target}" (${roleLabel})${oleh}`
+    case 'activate_user':
+      if (d.reason === 'forbidden') return `Gagal aktifkan "${target}" — tidak punya izin`
+      return `Mengaktifkan user "${target}" (${roleLabel})${oleh}`
+    case 'deactivate_user':
+      if (d.reason === 'forbidden') return `Gagal nonaktifkan "${target}" — tidak punya izin`
+      return `Menonaktifkan user "${target}" (${roleLabel})${oleh}`
+    case 'reset_password':
+      if (d.reason === 'forbidden') return `Gagal reset password "${target}" — tidak punya izin`
+      if (d.self === true || d.self === 'true') return `Reset password sendiri`
+      return `Reset password "${target}" (${roleLabel})${oleh}`
+    case 'update_user': return target ? `Update data user "${target}"${oleh}` : `Update data user${oleh}`
+    case 'upload_batch': return d.filename ? `Upload batch: ${d.filename}` : 'Upload batch CV'
+    case 'submit_batch': return d.batch_id ? `Submit batch #${d.batch_id}` : 'Submit batch'
+    case 'update_setting': return `Update pengaturan${oleh}`
+    case 'add_position': return d.nama ? `Tambah posisi "${d.nama}"${oleh}` : `Tambah posisi${oleh}`
+    case 'update_position': return d.nama ? `Update posisi "${d.nama}"${oleh}` : `Update posisi${oleh}`
+    default: return JSON.stringify(detail).slice(0, 100)
+  }
+}
+
 const ACTION_LABELS: Record<string, string> = {
   login: 'Login', logout: 'Logout', upload_batch: 'Upload Batch', submit_batch: 'Submit Batch',
   add_user: 'Tambah User', update_user: 'Update User', delete_user: 'Hapus User',
@@ -83,7 +122,7 @@ export default function LogPage() {
                   <span className={log.status === 'success' ? 'badge badge-success' : 'badge badge-danger'}>{log.status}</span>
                 </td>
                 <td style={{ padding: '0.75rem 1rem', color: 'var(--color-text-muted)', fontSize: '0.75rem', maxWidth: 300 }}>
-                  {log.detail ? JSON.stringify(log.detail).slice(0, 120) : '-'}
+                  {formatDetail(log.action, log.detail)}
                 </td>
               </tr>
             ))}
