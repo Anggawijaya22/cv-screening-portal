@@ -70,44 +70,66 @@ export default function AccountPage() {
 
   async function handleAddUser() {
     setSaving(true); setMsg('')
-    const res = await fetch('/api/users', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(form) })
-    const r = await res.json()
-    if (r.error) { setMsg(r.error); setSaving(false); return }
-    setUsers(prev => [r.data, ...prev])
-    setShowAdd(false); setForm({ nama: '', username: '', role: 'hr_admin', password: '' }); setSaving(false)
+    try {
+      const res = await fetch('/api/users', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(form) })
+      const r = await res.json().catch(() => ({ error: `Server error (${res.status})` }))
+      if (!res.ok || r.error) { setMsg(r.error ?? 'Gagal menambah user'); return }
+      setUsers(prev => [r.data, ...prev])
+      setShowAdd(false); setForm({ nama: '', username: '', role: 'hr_admin', password: '' })
+    } catch {
+      setMsg('Gagal terhubung ke server')
+    } finally {
+      setSaving(false)
+    }
   }
 
   async function handleToggle(target: User) {
     const newActive = !target.is_active
-    const res = await fetch(`/api/users/${target.id}`, {
-      method: 'PUT', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ is_active: newActive }),
-    })
-    const r = await res.json()
-    if (r.error) { alert(r.error); return }
-    setUsers(prev => prev.map(u => u.id === target.id ? { ...u, is_active: newActive } : u))
+    try {
+      const res = await fetch(`/api/users/${target.id}`, {
+        method: 'PUT', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ is_active: newActive }),
+      })
+      const r = await res.json().catch(() => ({ error: `Server error (${res.status})` }))
+      if (!res.ok || r.error) { alert(r.error ?? 'Gagal mengubah status user'); return }
+      setUsers(prev => prev.map(u => u.id === target.id ? { ...u, is_active: newActive } : u))
+    } catch {
+      alert('Gagal terhubung ke server')
+    }
   }
 
   async function handleChangePw() {
     if (!newPw || !pwTarget) return
     setSaving(true); setMsg('')
-    const res = await fetch(`/api/users/${pwTarget.id}`, {
-      method: 'PUT', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ password: newPw }),
-    })
-    const r = await res.json()
-    if (r.error) { setMsg(r.error); setSaving(false); return }
-    setPwTarget(null); setNewPw(''); setShowNewPw(false); setSaving(false)
+    try {
+      const res = await fetch(`/api/users/${pwTarget.id}`, {
+        method: 'PUT', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ password: newPw }),
+      })
+      const r = await res.json().catch(() => ({ error: `Server error (${res.status})` }))
+      if (!res.ok || r.error) { setMsg(r.error ?? 'Gagal mengubah password'); return }
+      setPwTarget(null); setNewPw(''); setShowNewPw(false)
+    } catch {
+      setMsg('Gagal terhubung ke server')
+    } finally {
+      setSaving(false)
+    }
   }
 
   async function handleDelete() {
     if (!deleteTarget) return
     setSaving(true)
-    const res = await fetch(`/api/users/${deleteTarget.id}`, { method: 'DELETE' })
-    const r = await res.json()
-    if (r.error) { alert(r.error); setSaving(false); return }
-    setUsers(prev => prev.filter(u => u.id !== deleteTarget.id))
-    setDeleteTarget(null); setSaving(false)
+    try {
+      const res = await fetch(`/api/users/${deleteTarget.id}`, { method: 'DELETE' })
+      const r = await res.json().catch(() => ({ error: `Server error (${res.status})` }))
+      if (!res.ok || r.error) { alert(r.error ?? 'Gagal menghapus user'); return }
+      setUsers(prev => prev.filter(u => u.id !== deleteTarget.id))
+      setDeleteTarget(null)
+    } catch {
+      alert('Gagal terhubung ke server')
+    } finally {
+      setSaving(false)
+    }
   }
 
   if (!me) return null
