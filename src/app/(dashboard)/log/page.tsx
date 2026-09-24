@@ -6,18 +6,19 @@ import type { ActivityLog } from '@/types'
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function formatDetail(action: string, detail: any): string {
   if (!detail) return '-'
-  const d = detail as Record<string, string>
-  const oleh = d.oleh ? ` oleh ${d.oleh}` : ''
-  const target = d.target_nama || d.username || d.target_id || ''
-  const role = d.target_role || d.role || ''
+  const d = detail as Record<string, unknown>
+  const s = (k: string) => String(d[k] ?? '')
+  const oleh = d.oleh ? ` oleh ${s('oleh')}` : ''
+  const target = s('target_nama') || s('username') || s('target_id')
+  const role = s('target_role') || s('role')
   const roleLabel = role === 'developer' ? 'Developer' : role === 'hr_main_admin' ? 'HR Main Admin' : role === 'hr_admin' ? 'HR Admin' : role
 
   switch (action) {
     case 'login': return 'Login berhasil'
     case 'logout': return 'Logout'
     case 'add_user':
-      if (d.reason === 'forbidden') return `Gagal — tidak punya izin (role: ${d.actor_role})`
-      if (d.error) return `Gagal menambah user "${target}" — ${d.error}`
+      if (d.reason === 'forbidden') return `Gagal — tidak punya izin (role: ${s('actor_role')})`
+      if (d.error) return `Gagal menambah user "${target}" — ${s('error')}`
       return `Menambah user "${target}" sebagai ${roleLabel}${oleh}`
     case 'delete_user':
       if (d.reason === 'forbidden') return `Gagal hapus "${target}" — tidak punya izin`
@@ -30,14 +31,14 @@ function formatDetail(action: string, detail: any): string {
       return `Menonaktifkan user "${target}" (${roleLabel})${oleh}`
     case 'reset_password':
       if (d.reason === 'forbidden') return `Gagal reset password "${target}" — tidak punya izin`
-      if (d.self === true || d.self === 'true') return `Reset password sendiri`
+      if (d.self) return `Reset password sendiri`
       return `Reset password "${target}" (${roleLabel})${oleh}`
     case 'update_user': return target ? `Update data user "${target}"${oleh}` : `Update data user${oleh}`
-    case 'upload_batch': return d.filename ? `Upload batch: ${d.filename}` : 'Upload batch CV'
-    case 'submit_batch': return d.batch_id ? `Submit batch #${d.batch_id}` : 'Submit batch'
+    case 'upload_batch': return d.filename ? `Upload batch: ${s('filename')}` : 'Upload batch CV'
+    case 'submit_batch': return d.batch_id ? `Submit batch #${s('batch_id')}` : 'Submit batch'
     case 'update_setting': return `Update pengaturan${oleh}`
-    case 'add_position': return d.nama ? `Tambah posisi "${d.nama}"${oleh}` : `Tambah posisi${oleh}`
-    case 'update_position': return d.nama ? `Update posisi "${d.nama}"${oleh}` : `Update posisi${oleh}`
+    case 'add_position': return d.nama ? `Tambah posisi "${s('nama')}"${oleh}` : `Tambah posisi${oleh}`
+    case 'update_position': return d.nama ? `Update posisi "${s('nama')}"${oleh}` : `Update posisi${oleh}`
     default: return JSON.stringify(detail).slice(0, 100)
   }
 }
