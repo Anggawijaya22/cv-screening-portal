@@ -39,6 +39,7 @@ function formatDetail(action: string, detail: any): string {
     case 'update_setting': return `Update pengaturan${oleh}`
     case 'add_position': return d.nama ? `Tambah posisi "${s('nama')}"${oleh}` : `Tambah posisi${oleh}`
     case 'update_position': return d.nama ? `Update posisi "${s('nama')}"${oleh}` : `Update posisi${oleh}`
+    case 'auto_cleanup': return `Auto cleanup: ${s('files_deleted')} file, ${s('batches_deleted')} batch, ${s('candidates_deleted')} kandidat dihapus`
     default: return JSON.stringify(detail).slice(0, 100)
   }
 }
@@ -49,6 +50,7 @@ const ACTION_LABELS: Record<string, string> = {
   activate_user: 'Aktifkan User', deactivate_user: 'Nonaktifkan User',
   reset_password: 'Reset Password',
   update_setting: 'Update Setting', add_position: 'Tambah Posisi', update_position: 'Update Posisi',
+  auto_cleanup: 'Auto Cleanup',
 }
 
 export default function LogPage() {
