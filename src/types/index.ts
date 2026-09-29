@@ -78,5 +78,4 @@ export interface DashboardStats {
   hr_review: number
   trend: { date: string; count: number }[]
   per_posisi: { posisi: string; count: number }[]
-  top_candidates: CvCandidate[]
 }
