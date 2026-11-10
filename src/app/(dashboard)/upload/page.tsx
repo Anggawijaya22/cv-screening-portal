@@ -3,7 +3,10 @@
 import { useEffect, useState, useCallback, useRef } from 'react'
 import { Upload, CheckCircle2, XCircle, Loader2, AlertTriangle, Send, RefreshCw } from 'lucide-react'
 import { createClient } from '@/lib/supabase/client'
+import { OCR_MAX_BYTES } from '@/lib/ocr-limits'
 import type { Position, ExtractStatus } from '@/types'
+
+const MAX_FILE_BYTES = 3 * 1024 * 1024
 
 interface FileItem {
   id: string
@@ -31,6 +34,7 @@ export default function UploadPage() {
   const [submitting, setSubmitting] = useState(false)
   const [submitted, setSubmitted] = useState(false)
   const [submitMsg, setSubmitMsg] = useState('')
+  const [rejected, setRejected] = useState<string[]>([])
   const processingRef = useRef(false)
   const supabase = createClient()
 
@@ -101,6 +105,21 @@ export default function UploadPage() {
         fd.append('candidate_id', fi.id)
 
         if (isLargePdf) {
+          // file_url stays null on these failures, so the cleanup cron can't find the file later
+          const failLarge = async (msg: string) => {
+            await supabase.storage.from('cv-files').remove([storagePath])
+            setFiles(prev => prev.map(f => f.id === fi.id ? { ...f, status: 'failed', error_message: msg } : f))
+            await supabase.from('cv_candidates').update({ extract_status: 'failed', error_message: msg }).eq('id', fi.id)
+            const { data: b } = await supabase.from('cv_batches').select('processed, failed, total_files').eq('id', currentBatchId!).single()
+            if (b) {
+              await supabase.from('cv_batches').update({
+                processed: b.processed + 1,
+                failed: b.failed + 1,
+                status: b.processed + 1 >= b.total_files ? 'completed' : 'processing',
+              }).eq('id', currentBatchId!)
+            }
+          }
+
           // Step 1: upload file directly from browser to Supabase Storage
           const { error: uploadError } = await supabase.storage
             .from('cv-files').upload(storagePath, fi.file, { contentType: 'application/pdf', upsert: true })
@@ -110,7 +129,34 @@ export default function UploadPage() {
             continue
           }
 
-          // Step 2: call Supabase Edge Function (60s timeout) — no Vercel 10s limit
+          // Step 2: digital PDFs are read directly, no OCR and no OCR size limit
+          fd.append('storage_path', storagePath)
+          const textResult = await fetch('/api/process-cv', { method: 'POST', body: fd, signal: AbortSignal.timeout(15000) })
+            .then(r => r.ok ? r.json() : null)
+            .catch(() => null)
+          if (textResult?.extract_status === 'success') {
+            setFiles(prev => prev.map(f => f.id === fi.id ? {
+              ...f, status: 'success', ocr_used: false, error_message: null, text_length: textResult.text_length ?? 0,
+            } : f))
+            continue
+          }
+
+          // Step 3: scanned PDFs above the OCR limit are shrunk in the browser first
+          if (fi.file.size > OCR_MAX_BYTES) {
+            try {
+              const { compressScannedPdf } = await import('@/lib/compress-scanned-pdf')
+              const compressed = await compressScannedPdf(fi.file)
+              // Storage policy has no UPDATE, so the original can't be overwritten in place
+              await supabase.storage.from('cv-files').remove([storagePath])
+              const { error } = await supabase.storage.from('cv-files').upload(storagePath, compressed, { contentType: 'application/pdf' })
+              if (error) throw error
+            } catch {
+              await failLarge('PDF tidak bisa diproses: file rusak atau hasil scan terlalu besar')
+              continue
+            }
+          }
+
+          // Step 4: call Supabase Edge Function (60s timeout) — no Vercel 10s limit
           try {
             const { data: result, error: fnError } = await supabase.functions.invoke('ocr-process', {
               body: { storage_path: storagePath, batch_id: currentBatchId!, candidate_id: fi.id },
@@ -124,9 +170,7 @@ export default function UploadPage() {
               text_length: result.text_length ?? 0,
             } : f))
           } catch (fnErr) {
-            const msg = String(fnErr).includes('abort') ? 'Timeout: OCR melebihi batas waktu' : 'Koneksi ke server gagal'
-            setFiles(prev => prev.map(f => f.id === fi.id ? { ...f, status: 'failed', error_message: msg } : f))
-            await supabase.from('cv_candidates').update({ extract_status: 'failed', error_message: msg }).eq('id', fi.id)
+            await failLarge(String(fnErr).includes('abort') ? 'Timeout: OCR melebihi batas waktu' : 'Koneksi ke server gagal')
           }
           continue
         } else {
@@ -167,15 +211,20 @@ export default function UploadPage() {
     }
   }, [selectedPos, positions, batchId, files.length])
 
-  const handleDrop = useCallback((e: React.DragEvent) => {
+  const acceptFiles = (list: File[]) => {
+    const valid = list.filter(f => /\.(pdf|docx|doc|rtf|odt)$/i.test(f.name))
+    setRejected(valid.filter(f => f.size > MAX_FILE_BYTES).map(f => `${f.name} (${(f.size / 1048576).toFixed(2)} MB)`))
+    const accepted = valid.filter(f => f.size <= MAX_FILE_BYTES)
+    if (accepted.length) processFiles(accepted)
+  }
+
+  const handleDrop = (e: React.DragEvent) => {
     e.preventDefault(); setDragging(false)
-    const dropped = Array.from(e.dataTransfer.files).filter(f => /\.(pdf|docx|doc|rtf|odt)$/i.test(f.name))
-    if (dropped.length) processFiles(dropped)
-  }, [processFiles])
+    acceptFiles(Array.from(e.dataTransfer.files))
+  }
 
   const handleBrowse = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const picked = Array.from(e.target.files ?? []).filter(f => /\.(pdf|docx|doc|rtf|odt)$/i.test(f.name))
-    if (picked.length) processFiles(picked)
+    acceptFiles(Array.from(e.target.files ?? []))
     e.target.value = ''
   }
 
@@ -235,10 +284,15 @@ export default function UploadPage() {
             {selectedPos ? 'Drag & drop file CV di sini atau klik untuk browse' : 'Pilih posisi dilamar terlebih dahulu'}
           </div>
           <div style={{ fontSize: '0.8rem', color: 'var(--color-text-muted)', marginTop: '0.5rem' }}>
-            PDF, DOCX, DOC, RTF, ODT • Maksimal 10MB per file • Multiple file didukung
+            PDF, DOCX, DOC, RTF, ODT • Maksimal 3MB per file • Multiple file didukung
           </div>
           <input id="file-input" type="file" multiple accept=".pdf,.docx,.doc,.rtf,.odt" style={{ display: 'none' }} onChange={handleBrowse} />
         </div>
+        {rejected.length > 0 && (
+          <div style={{ fontSize: '0.8rem', color: 'var(--color-danger)' }}>
+            Ditolak karena melebihi 3MB: {rejected.join(', ')}
+          </div>
+        )}
       </div>
 
       {/* Progress */}
