@@ -20,37 +20,47 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'Missing required fields' }, { status: 400 })
   }
 
-  // Large PDF already uploaded by the browser: read its text layer only.
-  // needs_ocr sends the client to the OCR flow and leaves the DB untouched.
+  // File already uploaded by the browser. PDF/DOCX text is read in the browser (client_text),
+  // so the server never downloads them; other formats are downloaded and parsed here.
   if (storagePath_input) {
     const storagePath = storagePath_input
     if (!storagePath.startsWith(`cv-files/${batch_id}/${candidate_id}_`)) {
       return NextResponse.json({ error: 'Invalid storage_path' }, { status: 400 })
     }
+    const ext = storagePath.split('.').pop()?.toLowerCase() ?? ''
+    const clientText = formData.get('client_text')
+    const ocrUsed = formData.get('ocr_used') === '1'
 
     let text = ''
+    let errorMessage: string | null = null
     try {
-      const { data: blob, error } = await supabase.storage.from('cv-files').download(storagePath)
-      if (error || !blob) throw error ?? new Error('File tidak ditemukan')
-      const { extractPdf } = await import('@/lib/extractors/pdf')
-      text = (await extractPdf(Buffer.from(await blob.arrayBuffer()))).text
+      if (typeof clientText === 'string') {
+        text = clientText
+      } else {
+        const { data: blob, error } = await supabase.storage.from('cv-files').download(storagePath)
+        if (error || !blob) throw error ?? new Error('File tidak ditemukan')
+        const { extractDocx } = await import('@/lib/extractors/docx')
+        text = (await extractDocx(Buffer.from(await blob.arrayBuffer()), ext)).text
+      }
+      if (text.trim().length < 10) throw new Error('Teks tidak dapat diekstrak dari file ini')
+      text = cleanCvText(text)
     } catch (err) {
-      console.error('[process-cv] text layer error:', err)
+      console.error('[process-cv] storage file error:', err)
+      errorMessage = String(err).replace(/^(AbortError|Error): /, '')
+      text = ''
     }
 
-    if (text.length < 50) return NextResponse.json({ ok: false, needs_ocr: true })
-
-    const cleaned = cleanCvText(text)
+    const status = errorMessage ? 'failed' : 'success'
     const publicUrl = `${process.env.NEXT_PUBLIC_SUPABASE_URL}/storage/v1/object/public/${storagePath}`
 
     after(async () => {
       const [, { data: batch }, { data: total }] = await Promise.all([
         supabase.from('cv_candidates').update({
           file_url: publicUrl,
-          ocr_used: false,
-          cv_text: cleaned,
-          extract_status: 'success',
-          error_message: null,
+          ocr_used: ocrUsed,
+          cv_text: text || null,
+          extract_status: status,
+          error_message: errorMessage,
         }).eq('id', candidate_id),
         supabase.from('cv_batches')
           .select('processed, success, failed').eq('id', batch_id).single(),
@@ -61,18 +71,19 @@ export async function POST(req: NextRequest) {
         const newProcessed = batch.processed + 1
         await supabase.from('cv_batches').update({
           processed: newProcessed,
-          success: batch.success + 1,
+          success: status === 'success' ? batch.success + 1 : batch.success,
+          failed: status !== 'success' ? batch.failed + 1 : batch.failed,
           status: newProcessed >= (total?.length ?? 0) ? 'completed' : 'processing',
         }).eq('id', batch_id)
       }
     })
 
     return NextResponse.json({
-      ok: true,
-      extract_status: 'success',
-      ocr_used: false,
-      text_length: cleaned.length,
-      error_message: null,
+      ok: status === 'success',
+      extract_status: status,
+      ocr_used: ocrUsed,
+      text_length: text.length,
+      error_message: errorMessage,
       file_url: publicUrl,
     })
   }
